@@ -17,6 +17,7 @@ try {
   const paymentIntent= await stripe.paymentIntents.create({
     amount : amountUSDCents,
     currency: 'usd',
+    automatic_payment_methods: {enabled: true},
   });
   res.json({clientSecret: paymentIntent.client_secret,amountUSD: (amountUSDCents/100).toFixed(2)});
 } catch (error) {
