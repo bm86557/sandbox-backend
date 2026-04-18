@@ -33,9 +33,9 @@ app.post('/webhook',
 
     if (event.type === 'payment_intent.succeeded') {
       const pi = event.data.object;
-      const { sellerId, productId, productName } = pi.metadata;
+      const { sellerId, productId, productName, amountPKR } = pi.metadata;
 
-      const sellerPKR = Math.round((pi.amount / 100) * 278);
+      const sellerPKR = parseInt(amountPKR);
 
       try {
         const batch = db.batch();
