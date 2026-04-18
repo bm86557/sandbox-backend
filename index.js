@@ -1,5 +1,7 @@
 const admin = require('firebase-admin');
-const serviceAccount = require('./creds.js');
+const serviceAccount = JSON.parse(
+  Buffer.from(process.env.FIREBASE_CREDENTIALS_BASE64, 'base64').toString('utf8')
+);
 
 require('dotenv').config();
 const express = require('express');
