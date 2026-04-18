@@ -1,5 +1,6 @@
 const admin = require('firebase-admin');
-const serviceAccount = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+const serviceAccount = require('./creds.js');
+
 require('dotenv').config();
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
