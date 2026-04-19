@@ -35,44 +35,50 @@ app.post('/webhook',
 
     if (event.type === 'payment_intent.succeeded') {
       const pi = event.data.object;
-      const { sellerId, productId, productName, amountPKR } = pi.metadata;
-
-      const sellerPKR = parseInt(amountPKR);
-      const sellerDetails = pi.metadata.sellerId;
+      // Metadata se data nikalna
+      const { sellerId, productName } = pi.metadata;
 
       try {
         const batch = db.batch();
-        const distributions = sellerDetails.split(',');
-        distributions.forEach(entry=>{
-          const [sId,sAmount] = entry.split(':');
+        // sellerId string ko split karna
+        const distributions = sellerId.split(',');
+
+        distributions.forEach(entry => {
+          const [sId, sAmount] = entry.split(':');
           const amount = parseInt(sAmount);
-          if(sId && amount){
+
+          if (sId && !isNaN(amount)) {
+            // 1. Har seller ka wallet balance barhana
             const sellerRef = db.collection('users').doc(sId.trim());
-            batch.update(sellerRef,{
-              walletBalance:admin.firestore.FieldValue.increment(amount),
+            batch.update(sellerRef, {
+              walletBalance: admin.firestore.FieldValue.increment(amount),
               walletUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
+
+            // 2. Har seller ke liye transaction record banana (Loop ke andar)
+            const transRef = db.collection('walletTransactions').doc();
+            batch.set(transRef, {
+              userId: sId.trim(),
+              amountPKR: amount,
+              type: 'credit',
+              status: 'completed',
+              productName: productName || 'Craftoria Order',
+              stripePaymentIntentId: pi.id,
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
           }
-        })
-        // Transaction record
-        const transRef = db.collection('walletTransactions').doc();
-        batch.set(transRef,{
-          userId: sId.trim(),
-          amountPKR : amount,
-          type: 'credit',
-          status : 'completed',
-          stripePaymentIntentId : pi.id,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
         await batch.commit();
-        console.log(`✅ Payment distributed to ${distributions.length}sellers `);
+        console.log(`✅ Payment distributed to ${distributions.length} sellers`);
 
       } catch (dbError) {
         console.log('Firestore error:', dbError.message);
+        // Error ke bawajood res bhejna zaroori hai
       }
     }
 
+    // Stripe ko response dena ke event receive ho gaya
     res.json({ received: true });
   }
 );
@@ -91,10 +97,10 @@ try {
       currency: 'usd',
       automatic_payment_methods: { enabled: true },
       metadata: {
-        sellerId: sellerId || '',
-        productId: productId || '',
-        productName: productName || '',
-        amountPKR: amountPKR.toString(),
+        sellerId: String(sellerId),
+        productId: String(productId) || '',
+        productName: String(productName)|| '',
+        amountPKR: String(amountPKR),
       }
   });
   res.json({clientSecret: paymentIntent.client_secret,amountUSD: (amountUSDCents/100).toFixed(2)});
