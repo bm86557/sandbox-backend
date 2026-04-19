@@ -9,22 +9,31 @@ require('dotenv').config();
 const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+let stripe = null;
 
-if (!process.env.FIREBASE_CREDENTIALS_BASE64) {
-  console.error('Missing FIREBASE_CREDENTIALS_BASE64');
-  process.exit(1);
+let db = null;
+let startupError = null;
+try {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('Missing STRIPE_SECRET_KEY');
+  }
+  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+  if (!process.env.FIREBASE_CREDENTIALS_BASE64) {
+    throw new Error('Missing FIREBASE_CREDENTIALS_BASE64');
+  }
+  const serviceAccount = JSON.parse(
+    Buffer.from(process.env.FIREBASE_CREDENTIALS_BASE64, 'base64').toString('utf8')
+  );
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+  db = admin.firestore();
+  console.log('Firebase initialized');
+} catch (err) {
+  startupError = err;
+  console.error('Startup config error:', err.message);
 }
-
-const serviceAccount = JSON.parse(
-  Buffer.from(process.env.FIREBASE_CREDENTIALS_BASE64, 'base64').toString('utf8')
-);
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-const db = admin.firestore();
-console.log('Firebase initialized');
 
 const PKR_TO_USD = parseFloat(process.env.PKR_TO_USD || '278', 10);
 
@@ -64,10 +73,16 @@ app.get('/', (_req, res) => {
 });
 
 app.get('/health', (_req, res) => {
+  if (startupError) {
+    return res.status(500).json({ ok: false, error: startupError.message });
+  }
   res.json({ ok: true });
 });
 
 app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (startupError || !stripe || !db) {
+    return res.status(500).json({ error: startupError?.message || 'Server not configured' });
+  }
   let event;
   try {
     event = stripe.webhooks.constructEvent(
@@ -136,6 +151,9 @@ app.use(cors());
 app.use(express.json());
 
 app.post('/create-payment-intent', async (req, res) => {
+  if (startupError || !stripe) {
+    return res.status(500).json({ error: startupError?.message || 'Stripe not configured' });
+  }
   try {
     const {
       amountPKR,
