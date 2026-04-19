@@ -7,6 +7,8 @@ require('dotenv').config();
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
+const { type } = require('node:os');
+const { create } = require('node:domain');
 
 admin.initializeApp({
   credential : admin.credential.cert(serviceAccount)
@@ -36,29 +38,35 @@ app.post('/webhook',
       const { sellerId, productId, productName, amountPKR } = pi.metadata;
 
       const sellerPKR = parseInt(amountPKR);
+      const sellerDetails = pi.metadata.sellerId;
 
       try {
         const batch = db.batch();
-
-        // Seller wallet update
-        batch.update(db.collection('users').doc(sellerId), {
-          walletBalance: admin.firestore.FieldValue.increment(sellerPKR),
-          walletUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
+        const distributions = sellerDetails.split(',');
+        distributions.forEach(entry=>{
+          const [sId,sAmount] = entry.split(':');
+          const amount = parseInt(sAmount);
+          if(sId && amount){
+            const sellerRef = db.collection('users').doc(sId.trim());
+            batch.update(sellerRef,{
+              walletBalance:admin.firestore.FieldValue.increment(amount),
+              walletUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        })
         // Transaction record
-        batch.set(db.collection('walletTransactions').doc(), {
-          userId: sellerId,
+        const transRef = db.collection('walletTransactions').doc();
+        batch.set(transRef,{
+          userId: sId.trim(),
+          amountPKR : amount,
           type: 'credit',
-          amountPKR: sellerPKR,
-          productId: productId || '',
-          productName: productName || '',
-          stripePaymentIntentId: pi.id,
+          status : 'completed',
+          stripePaymentIntentId : pi.id,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
         await batch.commit();
-        console.log(`✅ PKR ${sellerPKR} seller ${sellerId} ko mila`);
+        console.log(`✅ Payment distributed to ${distributions.length}sellers `);
 
       } catch (dbError) {
         console.log('Firestore error:', dbError.message);
