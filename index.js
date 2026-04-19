@@ -66,6 +66,51 @@ function parsePayoutsFromMetadata(metadata) {
     .filter(Boolean);
 }
 
+async function creditSellersForPaymentIntent(pi) {
+  const payouts = parsePayoutsFromMetadata(pi.metadata);
+  if (!payouts.length) {
+    console.warn('No payouts in metadata for PI', pi.id);
+    return { ok: true, skipped: true, reason: 'no_payouts' };
+  }
+
+  await db.runTransaction(async (tx) => {
+    const lockRef = db.collection('stripeProcessedPayments').doc(pi.id);
+    const lockSnap = await tx.get(lockRef);
+    if (lockSnap.exists) return;
+
+    tx.set(lockRef, {
+      paymentIntentId: pi.id,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    for (const row of payouts) {
+      const sellerRef = db.collection('users').doc(row.sellerId);
+      tx.set(
+        sellerRef,
+        {
+          walletBalance: admin.firestore.FieldValue.increment(row.amountPKR),
+          walletUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      const transRef = db.collection('walletTransactions').doc();
+      tx.set(transRef, {
+        userId: row.sellerId,
+        amountPKR: row.amountPKR,
+        type: 'credit',
+        status: 'completed',
+        productName: row.productSummary,
+        stripePaymentIntentId: pi.id,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+  });
+
+  console.log('Credited sellers for', pi.id, 'count', payouts.length);
+  return { ok: true, skipped: false, sellers: payouts.length };
+}
+
 const app = express();
 
 app.get('/', (_req, res) => {
@@ -97,48 +142,8 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
   if (event.type === 'payment_intent.succeeded') {
     const pi = event.data.object;
-    const payouts = parsePayoutsFromMetadata(pi.metadata);
-
-    if (!payouts.length) {
-      console.warn('No payouts in metadata for PI', pi.id);
-      return res.json({ received: true });
-    }
-
     try {
-      await db.runTransaction(async (tx) => {
-        const lockRef = db.collection('stripeProcessedPayments').doc(pi.id);
-        const lockSnap = await tx.get(lockRef);
-        if (lockSnap.exists) return;
-
-        tx.set(lockRef, {
-          paymentIntentId: pi.id,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        for (const row of payouts) {
-          const sellerRef = db.collection('users').doc(row.sellerId);
-          tx.set(
-            sellerRef,
-            {
-              walletBalance: admin.firestore.FieldValue.increment(row.amountPKR),
-              walletUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
-
-          const transRef = db.collection('walletTransactions').doc();
-          tx.set(transRef, {
-            userId: row.sellerId,
-            amountPKR: row.amountPKR,
-            type: 'credit',
-            status: 'completed',
-            productName: row.productSummary,
-            stripePaymentIntentId: pi.id,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-      });
-      console.log('Credited sellers for', pi.id, 'count', payouts.length);
+      await creditSellersForPaymentIntent(pi);
     } catch (dbError) {
       console.error('Wallet credit error:', dbError);
     }
@@ -149,6 +154,27 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
 app.use(cors());
 app.use(express.json());
+
+app.post('/confirm-payment', async (req, res) => {
+  if (startupError || !stripe || !db) {
+    return res.status(500).json({ error: startupError?.message || 'Server not configured' });
+  }
+  try {
+    const paymentIntentId = String(req.body?.paymentIntentId || '').trim();
+    if (!paymentIntentId.startsWith('pi_')) {
+      return res.status(400).json({ error: 'Invalid paymentIntentId' });
+    }
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (!pi || pi.status !== 'succeeded') {
+      return res.status(400).json({ error: `Payment not succeeded: ${pi?.status || 'unknown'}` });
+    }
+    const result = await creditSellersForPaymentIntent(pi);
+    return res.json({ ok: true, result });
+  } catch (error) {
+    console.error('Confirm payment error:', error.message);
+    return res.status(400).json({ error: error.message });
+  }
+});
 
 app.post('/create-payment-intent', async (req, res) => {
   if (startupError || !stripe) {
