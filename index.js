@@ -1,23 +1,8 @@
+// index.js - Sirf ye rakho, Firebase hata do!
 require('dotenv').config();
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
-
-// Firebase Admin SDK add karo
-const admin = require('firebase-admin');
-const serviceAccount =  {
-  type: "service_account",
-  project_id: process.env.FIREBASE_PROJECT_ID,
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n').replace(/"/g,'').trim(),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: "https://accounts.google.com/o/oauth2/auth",
-  token_uri: "https://oauth2.googleapis.com/token"}
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
 
 const app = express();
 app.use(cors());
@@ -25,9 +10,7 @@ app.use(express.json());
 
 const PKR_TO_USD = 278;
 
-// ─────────────────────────────────────────
-// ROUTE 1: existing route ()
-// ─────────────────────────────────────────
+// Sirf ye ek route kaafi hai
 app.post('/create-payment-intent', async (req, res) => {
   try {
     const { amountPKR } = req.body;
@@ -39,95 +22,10 @@ app.post('/create-payment-intent', async (req, res) => {
     res.json({
       clientSecret: paymentIntent.client_secret,
       amountUSD: (amountUSDCents / 100).toFixed(2),
-      paymentIntentId: paymentIntent.id  // ← ye add kiya
+      paymentIntentId: paymentIntent.id
     });
   } catch (error) {
     res.status(400).json({ error: error.message });
-  }
-});
-
-// ─────────────────────────────────────────
-// ROUTE 2: COD Order Firestore mein save karo
-// ─────────────────────────────────────────
-app.post('/orders/create-cod', async (req, res) => {
-  try {
-    const { buyerId, sellerId, items, totalAmountPKR, address } = req.body;
-
-    const db = admin.firestore();
-    const orderRef = db.collection('orders').doc();
-
-    await orderRef.set({
-      orderId: orderRef.id,
-      buyerId,
-      sellerId,
-      items,
-      address,
-      totalAmountPKR,
-      paymentMethod: 'cash_on_delivery',
-      status: 'PENDING',
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    res.json({ orderId: orderRef.id });
-
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ─────────────────────────────────────────
-// ROUTE 3: Stripe payment success ke baad order save karo
-// ─────────────────────────────────────────
-app.post('/orders/save-after-payment', async (req, res) => {
-  try {
-    const {
-      buyerId,
-      sellerId,
-      items,
-      totalAmountPKR,
-      address,
-      paymentIntentId
-    } = req.body;
-
-    const db = admin.firestore();
-    const orderRef = db.collection('orders').doc();
-
-    await orderRef.set({
-      orderId: orderRef.id,
-      buyerId,
-      sellerId,
-      items,
-      address,
-      totalAmountPKR,
-      paymentMethod: 'stripe',
-      stripePaymentIntentId: paymentIntentId,
-      status: 'PENDING',
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    res.json({ orderId: orderRef.id });
-
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ─────────────────────────────────────────
-// ROUTE 4: Seller order status update kare
-// ─────────────────────────────────────────
-app.patch('/orders/:orderId/status', async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const { status } = req.body;
-    // status = "CONFIRMED" ya "COMPLETED" ya "CANCELLED"
-
-    const db = admin.firestore();
-    await db.collection('orders').doc(orderId).update({ status });
-
-    res.json({ success: true });
-
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
 });
 
